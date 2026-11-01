@@ -737,6 +737,72 @@ Invoke-RestMethod "http://<hub-ip>:8080/api/bt-saved-command" -Method Post -Body
 
 A command that cannot be sent gives `400` with the reason in `message`.
 
+### TV and media keys
+
+With the `btkeyboard` profile, key names can also be consumer-page
+(`0x0C`) keys. The hub sends them in HAL's report `0x03`. An Android TV
+box without its own key layout (the hub's keyboard reports vendor
+`0xFFFF`) maps them through `Generic.kl`. There the keyboard's Home key
+(`home`, `0x07/0x4A`) only moves the cursor:
+
+| Key name | Usage | Android key |
+| --- | --- | --- |
+| `tvhome` | `0x223` | HOME |
+| `tvback` | `0x224` | BACK |
+| `select` (`ok`) | `0x041` | DPAD_CENTER |
+| `tvmenu` | `0x040` | MENU |
+| `playpause` | `0x0CD` | MEDIA_PLAY_PAUSE |
+| `stop` | `0x0B7` | MEDIA_STOP |
+| `nexttrack` / `previoustrack` | `0x0B5` / `0x0B6` | MEDIA_NEXT / MEDIA_PREVIOUS |
+| `fastforward` / `rewind` | `0x0B3` / `0x0B4` | MEDIA_FAST_FORWARD / MEDIA_REWIND |
+| `channelup` / `channeldown` | `0x09C` / `0x09D` | CHANNEL_UP / CHANNEL_DOWN |
+| `mute` | `0x0E2` | VOLUME_MUTE |
+| `volumeup` / `volumedown` | `0x0E9` / `0x0EA` | VOLUME_UP / VOLUME_DOWN |
+
+`consumer` plus a hex usage (`consumer221`, `consumer:0x2FF`) sends any
+other usage from `0x001` to `0x2FF`. These keys take no modifiers. They
+work in `report`/`reportseq` codes, in saved-device scripts, and on the
+Bluetooth page's TV key row.
+
+### A saved target as a Harmony device
+
+A saved Bluetooth device with the `btkeyboard` profile can become a
+Harmony device, so the Harmony remote, the Touch and activities can use
+its keys like any other device's:
+
+```powershell
+Invoke-RestMethod "http://<hub-ip>:8080/api/bt-harmony-device" -Method Post -Body @{
+  deviceId = "<saved-device-id>"
+  publish  = "1"      # "0" removes it
+}
+```
+
+The offline writer (`codexactivity` `CommitBtDevices`) adds an IP device
+named after the saved device. It is built like the
+[Home Assistant devices](#home-assistant-devices), but has its own tag
+(`melodious-bt-`) and protocol, and one writer never touches the other's
+devices. Its commands:
+
+- `DirectionUp`/`Down`/`Left`/`Right`: keyboard arrows
+- `Select`, `Back`, `Home`, `Menu`
+- `PlayPause`, `Play` and `Pause` (all three send Play/Pause), `Stop`,
+  `NextTrack`, `PreviousTrack`, `FastForward`, `Rewind`
+- `ChannelUp`, `ChannelDown`, `Mute`, `VolumeUp`, `VolumeDown`
+- `0` to `9`
+
+The protocol posts each press to `http://127.0.0.1:8080/api/bt-webhook`
+(`render_bt_webhook_json()`) as `{"device":"<saved-device-id>",
+"command":"<key name>"}`. The hub answers at once, then reconnects the
+target if needed and sends the key, one call at a time. Like the Home
+Assistant devices, a press is sent once; holding a button does not repeat
+it.
+
+The reply is the writer's JSON (`added`, `removed`, `changed`, …); `422`
+carries its refusal. It refuses to remove a device that an activity or
+button still uses. The saved device records `"harmony": true`. Deleting
+it, or changing its keyboard type, is refused until it is removed from
+Harmony. Renaming it renames the Harmony device.
+
 ## System status
 
 Read the bounded, non-mutating data shown by the modern System view
@@ -1052,6 +1118,8 @@ carries.
 | GET | `/api/bt-text-status` | `render_bluetooth_text_status_json()` |
 | POST | `/api/bt-text` | `render_bluetooth_text_json()` |
 | POST | `/api/bt-saved-command` | `render_bt_saved_command_json()` |
+| POST | `/api/bt-harmony-device` | `render_bt_harmony_device_json()` |
+| POST | `/api/bt-webhook` | `render_bt_webhook_json()` |
 | GET | `/api/version` | `render_version_json()` |
 | GET | `/api/update-status` | `render_update_status_json()` |
 | POST | `/api/irdb-import` | `render_irdb_import_json()` |

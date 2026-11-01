@@ -1854,10 +1854,34 @@ end
 -- webhook (harmonyengine core/ipmanager.lua getRequest), filling {d} from
 -- the device's Tokens and {c} from the command's Parameters with
 -- string.gsub.
-local HA_PROTOCOL_NAME = "Melodious Home Assistant"
-local HA_DEVICE_TAG = "melodious-ha-"
-local HA_MANUFACTURER = "Home Assistant"
-local HA_DEFAULT_MODEL = "Home Assistant entity"
+--
+-- The same writer also owns Melodious's Bluetooth keyboard devices: one IP
+-- device per saved Bluetooth target, whose protocol posts to the hub's own
+-- codex_webui (/api/bt-webhook). There {d} names the saved target and {c}
+-- the key, and codex_webui sends the HID report. Each owner keeps its own
+-- tag, protocol and device set; a commit for one never touches the other.
+local HA_OWNERS = {
+  ha = {
+    protocol = "Melodious Home Assistant",
+    tag = "melodious-ha-",
+    manufacturer = "Home Assistant",
+    defaultModel = "Home Assistant entity",
+    entityPattern = "^[a-z0-9_]+%.[a-z0-9_]+$",
+    entityHint = "an entity ID such as light.kitchen",
+    label = "Home Assistant"
+  },
+  bt = {
+    protocol = "Melodious Bluetooth keyboard",
+    tag = "melodious-bt-",
+    manufacturer = "Melodious Bluetooth",
+    defaultModel = "Bluetooth keyboard target",
+    entityPattern = "^bt_[0-9]+_[0-9]+$",
+    entityHint = "a saved Bluetooth device ID such as bt_1730000000_42",
+    -- Only codex_webui on this hub; never a URL from the request.
+    webhook = "http://127.0.0.1:8080/api/bt-webhook",
+    label = "Bluetooth keyboard"
+  }
+}
 local HA_MAX_DEVICES = 64
 local HA_MAX_COMMANDS = 128
 -- codex_webui numbers new commands from here too.
@@ -1869,15 +1893,15 @@ local HA_REFERENCE_RESOURCES = {"ActivityList", "MapList", "FunctionList"}
 -- kills the IP command task until the hub reboots. The tag is never a real
 -- SSDP uuid, so nothing else matches it, and it marks the devices this
 -- writer owns.
-local function isHaDevice(entry)
+local function isHaDevice(owner, entry)
   local device = type(entry) == "table" and entry.Device or nil
   local detected = type(device) == "table" and device.AutoDetectedDevice or nil
   return type(detected) == "table" and type(detected.Id) == "string" and
-    string.sub(detected.Id, 1, #HA_DEVICE_TAG) == HA_DEVICE_TAG
+    string.sub(detected.Id, 1, #owner.tag) == owner.tag
 end
 
-local function isHaProtocol(protocol)
-  return type(protocol) == "table" and protocol.Name == HA_PROTOCOL_NAME
+local function isHaProtocol(owner, protocol)
+  return type(protocol) == "table" and protocol.Name == owner.protocol
 end
 
 -- A placeholder value lands in a JSON body and in string.gsub's
@@ -1921,7 +1945,7 @@ end
 
 -- Check one device of the set; command references resolve to the spelling
 -- the device itself uses.
-local function haDeviceSpecFrom(raw, index)
+local function haDeviceSpecFrom(owner, raw, index)
   local label = "device " .. index
   if type(raw) ~= "table" then
     return nil, label .. " must be an object"
@@ -1929,13 +1953,13 @@ local function haDeviceSpecFrom(raw, index)
   local spec = {
     entity = haValue(raw.entity, 128),
     name = haLabel(raw.name, 64),
-    model = (raw.model == nil or raw.model == json.null) and HA_DEFAULT_MODEL or
+    model = (raw.model == nil or raw.model == json.null) and owner.defaultModel or
       haLabel(raw.model, 64),
     commands = {},
     inputs = {}
   }
-  if not spec.entity or not string.match(spec.entity, "^[a-z0-9_]+%.[a-z0-9_]+$") then
-    return nil, label .. " needs an entity ID such as light.kitchen"
+  if not spec.entity or not string.match(spec.entity, owner.entityPattern) then
+    return nil, label .. " needs " .. owner.entityHint
   end
   label = spec.entity
   if not spec.name then
@@ -2008,7 +2032,7 @@ local function haDeviceSpecFrom(raw, index)
   return spec
 end
 
-local function haSetFrom(set)
+local function haSetFrom(owner, set)
   if type(set) ~= "table" then
     return nil, "the device set must be an object"
   end
@@ -2016,13 +2040,13 @@ local function haSetFrom(set)
   if not devices or #devices > HA_MAX_DEVICES then
     return nil, "devices must be a list of at most " .. HA_MAX_DEVICES .. " devices"
   end
-  local out = {devices = {}, webhook = haWebhook(set.webhook)}
+  local out = {devices = {}, webhook = owner.webhook or haWebhook(set.webhook)}
   if #devices > 0 and not out.webhook then
     return nil, "webhook must be a plain http:// URL the hub can reach"
   end
   local entities, names = {}, {}
   for i, raw in ipairs(devices) do
-    local spec, specError = haDeviceSpecFrom(raw, i)
+    local spec, specError = haDeviceSpecFrom(owner, raw, i)
     if not spec then
       return nil, specError
     end
@@ -2132,16 +2156,16 @@ end
 
 -- Build one device entry from its spec, keeping the IDs, dates and timing
 -- an earlier commit or the device settings editor left on it.
-local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
+local function haDeviceEntry(owner, spec, old, deviceId, protocolId, nextId, now)
   local entry = old or {Device = haDeviceTable(spec, deviceId, now), DeviceFeatures = {}}
   local device = entry.Device
   device.Name = spec.name
   device.Model = spec.model
-  device.Manufacturer = HA_MANUFACTURER
-  device.ParentDeviceManufacturer = HA_MANUFACTURER
+  device.Manufacturer = owner.manufacturer
+  device.ParentDeviceManufacturer = owner.manufacturer
   device.Transport = 64
   device.Tokens = {Parameters = {{Key = "{d}", Value = spec.entity}}}
-  device.AutoDetectedDevice = {Id = HA_DEVICE_TAG .. deviceId}
+  device.AutoDetectedDevice = {Id = owner.tag .. deviceId}
   local previous = {}
   for _, command in ipairs(type(entry.Commands) == "table" and entry.Commands or {}) do
     if type(command) == "table" and type(command.Name) == "string" then
@@ -2190,11 +2214,11 @@ local function haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
   return entry
 end
 
-local function haProtocol(protocolId, webhook)
+local function haProtocol(owner, protocolId, webhook)
   return {
     Attributes = {}, IsPadded = false, IsFullSequence = false, Rating = json.null,
     NumberOfLinkedLanguage = 0, Status = json.null, IsPublic = false, HoldDelay = json.null,
-    PressMinimumRepeats = 0, SendingType = 0, Name = HA_PROTOCOL_NAME,
+    PressMinimumRepeats = 0, SendingType = 0, Name = owner.protocol,
     ControlSection = {
       Url = webhook,
       Method = "POST",
@@ -2215,7 +2239,7 @@ end
 -- Make the hub's Home Assistant devices match the requested set: add,
 -- update and remove the devices this writer owns, and keep one protocol
 -- that points at the webhook. Other devices are never touched.
-local function commitHaDevices(request)
+local function commitHaDevices(owner, request)
   if not blockerActive() then
     return {
       ok = false,
@@ -2223,7 +2247,7 @@ local function commitHaDevices(request)
       error = "offline device writer refused to run because the cloud blocker is not active"
     }
   end
-  local set, setError = haSetFrom(request.set)
+  local set, setError = haSetFrom(owner, request.set)
   if not set then
     return {ok = false, localOnly = true, error = setError}
   end
@@ -2270,7 +2294,7 @@ local function commitHaDevices(request)
   local owned, kept, otherNames = {}, {}, {}
   for _, entry in ipairs(deviceList.DevicesWithFeatures) do
     local device = type(entry) == "table" and entry.Device or {}
-    if isHaDevice(entry) and haEntityOf(entry) then
+    if isHaDevice(owner, entry) and haEntityOf(entry) then
       owned[haEntityOf(entry)] = entry
     else
       kept[#kept + 1] = entry
@@ -2291,17 +2315,26 @@ local function commitHaDevices(request)
     protocolList[key] = value
   end
   protocolList.Protocols = {}
-  local protocolId
+  -- The owner's protocol keeps its place, so a commit for one owner never
+  -- reorders (and so never re-saves) a list that holds the other's too.
+  local protocolId, protocolSlot
   for _, protocol in ipairs(oldProtocols.resource.Protocols) do
-    if isHaProtocol(protocol) then
-      protocolId = protocolId or protocol["Id-"]
+    if isHaProtocol(owner, protocol) then
+      if not protocolId then
+        protocolId = protocol["Id-"]
+        protocolSlot = #protocolList.Protocols + 1
+        protocolList.Protocols[protocolSlot] = false
+      end
     else
       protocolList.Protocols[#protocolList.Protocols + 1] = protocol
     end
   end
   if #set.devices > 0 then
     protocolId = protocolId or nextId()
-    protocolList.Protocols[#protocolList.Protocols + 1] = haProtocol(protocolId, set.webhook)
+    protocolSlot = protocolSlot or #protocolList.Protocols + 1
+    protocolList.Protocols[protocolSlot] = haProtocol(owner, protocolId, set.webhook)
+  elseif protocolSlot then
+    table.remove(protocolList.Protocols, protocolSlot)
   end
 
   local now = "/Date(" .. tostring(os.time() or 0) .. "000+0000)/"
@@ -2350,7 +2383,7 @@ local function commitHaDevices(request)
       deviceId = tostring(nextId())
     end
     local before = old and copyValue(old) or nil
-    local entry = haDeviceEntry(spec, old, deviceId, protocolId, nextId, now)
+    local entry = haDeviceEntry(owner, spec, old, deviceId, protocolId, nextId, now)
     wanted[spec.entity] = true
     kept[#kept + 1] = entry
     screens[#screens + 1] = {deviceId = deviceId, entry = entry}
@@ -2480,7 +2513,7 @@ local function commitHaDevices(request)
       ok = false,
       localOnly = true,
       rolledBack = restored and true or false,
-      error = "Harmony engine rejected the Home Assistant device reload"
+      error = "Harmony engine rejected the " .. owner.label .. " device reload"
     }
   end
   -- New etags plus a new revision: the Touch pulls both lists on its own.
@@ -2507,7 +2540,9 @@ local function processRequest(raw)
   elseif request.op == "CommitDeviceSettings" then
     response = commitDeviceSettings(request)
   elseif request.op == "CommitHaDevices" then
-    response = commitHaDevices(request)
+    response = commitHaDevices(HA_OWNERS.ha, request)
+  elseif request.op == "CommitBtDevices" then
+    response = commitHaDevices(HA_OWNERS.bt, request)
   elseif request.op == "CommitDeviceScreen" then
     response = commitDeviceScreen(request)
   elseif request.op == "Status" then

@@ -813,9 +813,10 @@ node tools/harmony_shell_smoke.mjs                # rebuilds the embedded web ap
 node tools/shipped_copy_hygiene.mjs               # no personal names or IDs in shipped files
 python3 tools/installer_contract_smoke.py         # the installers' contract, with a fake hub
 python3 -m unittest discover -s docker/tests      # the Docker manager
-for t in barrier device-screens ha-devices touch-controls; do
+for t in barrier device-screens ha-devices bt-devices touch-controls; do
   luajit tools/touch-validator/codexactivity-$t-test.lua
-done                                              # the hub's writer: barrier, screens, Home Assistant, press modes
+done                                              # the hub's writer: barrier, screens, Home Assistant, Bluetooth keyboard, press modes
+python3 tools/bt_harmony_webui_smoke.py           # Bluetooth TV keys and Harmony device set (codex_webui, host build)
 luajit tools/touch-validator/codexactivity-validate-test.lua tools/webui-sim/fixtures/touch-maplist.json
 luajit tools/touch-validator/netservicestarter-guards-test.lua   # offline sync guards
 (cd Android && ./gradlew :core-protocol:test)    # Android protocol and graph tests

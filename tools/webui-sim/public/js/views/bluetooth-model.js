@@ -140,6 +140,8 @@ export function parseBtInventory(jsonText) {
       name: String(d?.name ?? ""),
       type: String(d?.type ?? "btkeyboard"),
       bdaddr: String(d?.bdaddr ?? ""),
+      // Published as a Harmony device (POST /api/bt-harmony-device).
+      harmony: d?.harmony === true,
       commands: (Array.isArray(d?.commands) ? d.commands : [])
         .map((c) => ({
           name: String(c?.name ?? ""),
@@ -252,3 +254,31 @@ export const QUICK_KEYS = [
   { code: "altf4", label: "Alt+F4" },
   { code: "ctrlaltdelete", label: "Ctrl+Alt+Del" },
 ];
+
+/** TV and media keys: consumer-page (0x0C) usages the hub sends as report
+    0x03 (bt_consumer_usage() in codex_webui.c). Android maps them through
+    Generic.kl, so they work on a box without its own key layout, where the
+    keyboard's Home key only moves the cursor. Standard keyboard profile. */
+export const TV_KEYS = [
+  { code: "tvhome", label: "Home (TV)" },
+  { code: "tvback", label: "Back (TV)" },
+  { code: "select", label: "OK" },
+  { code: "tvmenu", label: "Menu (TV)" },
+  { code: "playpause", label: "Play/Pause" },
+  { code: "stop", label: "Stop" },
+  { code: "rewind", label: "Rewind" },
+  { code: "fastforward", label: "Fast forward" },
+  { code: "previoustrack", label: "Previous" },
+  { code: "nexttrack", label: "Next" },
+  { code: "channelup", label: "Channel +" },
+  { code: "channeldown", label: "Channel -" },
+  { code: "mute", label: "Mute" },
+  { code: "volumedown", label: "Volume -" },
+  { code: "volumeup", label: "Volume +" },
+];
+
+/** Only the Standard keyboard (Android TV / SHIELD) profile can become a
+    Harmony device: its commands are the TV keys above. */
+export function canBeHarmonyDevice(device) {
+  return String(device?.type ?? "") === "btkeyboard";
+}

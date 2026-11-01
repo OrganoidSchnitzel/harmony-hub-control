@@ -315,6 +315,9 @@ export function devices() {
   return raw.map((entry) => {
     const device = entry.Device ?? {};
     const transport = Number(device.Transport) || 1;
+    // A saved Bluetooth target published by the hub (codexactivity
+    // CommitBtDevices): an IP device whose keys the hub sends over Bluetooth.
+    const melodiousBt = String(device.AutoDetectedDevice?.Id ?? "").startsWith("melodious-bt-");
     return {
       id: String(device["Id-"]),
       name: device.Name || device.FriendlyName || `Device ${device["Id-"]}`,
@@ -323,9 +326,12 @@ export function devices() {
       type: device.DeviceType ?? "",
       typeLabel: device.DeviceTypeDisplayName || device.DeviceType || "",
       transport,
-      // Transport 32 is Bluetooth HID; 64 is Home Assistant IP; else IR.
-      isBluetooth: transport === 32,
-      isHa: transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant"),
+      // Transport 32 is Bluetooth HID; 64 is Home Assistant IP (or the hub's
+      // own Bluetooth keyboard devices); else IR.
+      isBluetooth: transport === 32 || melodiousBt,
+      isMelodiousBt: melodiousBt,
+      isHa: !melodiousBt &&
+        (transport === 64 || String(device.Manufacturer ?? "").toLowerCase().includes("home assistant")),
       entry,
       inputs: inputNames(entry),
       commands: (entry.Commands ?? []).map((c) => ({

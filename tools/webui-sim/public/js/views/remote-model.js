@@ -67,6 +67,8 @@ function normCmd(name) {
  *  HA detection: Transport 64, or Home Assistant manufacturer/protocol. */
 export function isHaDevice(device) {
   if (!device) return false;
+  if (device.isMelodiousBt === true ||
+      String(device.entry?.Device?.AutoDetectedDevice?.Id ?? "").startsWith("melodious-bt-")) return false;
   if (device.isHa === true) return true;
   const transport = Number(device.transport ?? device.Transport ?? device.entry?.Device?.Transport ?? 1);
   if (transport === 64) return true;
